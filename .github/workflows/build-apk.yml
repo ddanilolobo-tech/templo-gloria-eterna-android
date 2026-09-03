@@ -1,0 +1,63 @@
+name: Gerar APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "*.gradle"
+      - "gradle.properties"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o projeto
+        uses: actions/checkout@v4
+
+      - name: Preparar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Restaurar chave de assinatura
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > app/release.jks
+
+      - name: Compilar APK assinado
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle :app:assembleRelease --no-daemon
+
+      - name: Preparar arquivo
+        run: cp app/build/outputs/apk/release/app-release.apk Templo-Gloria-Eterna.apk
+
+      - name: Guardar APK do teste
+        uses: actions/upload-artifact@v4
+        with:
+          name: Templo-Gloria-Eterna
+          path: Templo-Gloria-Eterna.apk
+
+      - name: Publicar versão para download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-${{ github.run_number }}
+          name: Aplicativo Android ${{ github.run_number }}
+          make_latest: true
+          files: Templo-Gloria-Eterna.apk
