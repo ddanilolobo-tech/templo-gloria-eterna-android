@@ -36,7 +36,7 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           test -n "$ANDROID_KEYSTORE_BASE64"
-          KEYSTORE_BASE64_CLEAN="$(printf '%s' "$ANDROID_KEYSTORE_BASE64" | sed 's/^ANDROID_KEYSTORE_BASE64=//' | tr -d '[:space:]')"
+          KEYSTORE_BASE64_CLEAN="$(printf '%s\n' "$ANDROID_KEYSTORE_BASE64" | sed -n '1{s/^ANDROID_KEYSTORE_BASE64=//;p;}' | tr -d '[:space:]')"
           printf '%s' "$KEYSTORE_BASE64_CLEAN" | base64 --decode > app/release.jks
 
       - name: Compilar APK assinado
