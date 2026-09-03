@@ -33,18 +33,35 @@ jobs:
 
       - name: Restaurar chave de assinatura
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_BASE64_RAW: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          KEYSTORE_BASE64_CLEAN="$(printf '%s\n' "$ANDROID_KEYSTORE_BASE64" | sed -n '1{s/^ANDROID_KEYSTORE_BASE64=//;p;}' | tr -d '[:space:]')"
-          printf '%s' "$KEYSTORE_BASE64_CLEAN" | base64 --decode > app/release.jks
+          test -n "$ANDROID_KEYSTORE_BASE64_RAW"
+          if printf '%s\n' "$ANDROID_KEYSTORE_BASE64_RAW" | grep -q '^ANDROID_KEYSTORE_BASE64='; then
+            KEYSTORE_BASE64_CLEAN="$(printf '%s\n' "$ANDROID_KEYSTORE_BASE64_RAW" | sed -n 's/^ANDROID_KEYSTORE_BASE64=//p' | head -n 1)"
+          else
+            KEYSTORE_BASE64_CLEAN="$(printf '%s\n' "$ANDROID_KEYSTORE_BASE64_RAW" | head -n 1)"
+          fi
+          printf '%s' "$KEYSTORE_BASE64_CLEAN" | tr -d '[:space:]' | base64 --decode > app/release.jks
 
       - name: Compilar APK assinado
         env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle :app:assembleRelease --no-daemon
+          ANDROID_KEYSTORE_PASSWORD_RAW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS_RAW: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD_RAW: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          extract_secret() {
+            RAW_VALUE="$1"
+            SECRET_NAME="$2"
+            if printf '%s\n' "$RAW_VALUE" | grep -q "^${SECRET_NAME}="; then
+              printf '%s\n' "$RAW_VALUE" | sed -n "s/^${SECRET_NAME}=//p" | head -n 1 | tr -d '\r'
+            else
+              printf '%s\n' "$RAW_VALUE" | head -n 1 | tr -d '\r'
+            fi
+          }
+          export ANDROID_KEYSTORE_PASSWORD="$(extract_secret "$ANDROID_KEYSTORE_PASSWORD_RAW" ANDROID_KEYSTORE_PASSWORD)"
+          export ANDROID_KEY_ALIAS="$(extract_secret "$ANDROID_KEY_ALIAS_RAW" ANDROID_KEY_ALIAS)"
+          export ANDROID_KEY_PASSWORD="$(extract_secret "$ANDROID_KEY_PASSWORD_RAW" ANDROID_KEY_PASSWORD)"
+          gradle :app:assembleRelease --no-daemon
 
       - name: Preparar arquivo
         run: cp app/build/outputs/apk/release/app-release.apk Templo-Gloria-Eterna.apk
