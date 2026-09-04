@@ -17,6 +17,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
+import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
@@ -31,22 +32,36 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
+import androidx.core.content.ContextCompat;
+
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_FILE = 4101;
     private static final int REQUEST_STORAGE = 4102;
+    private static final int REQUEST_NOTIFICATIONS = 4103;
     private static final String CHURCH_HOST = "www.templodagloriaeterna.com.br";
+    private static final String SITE_ORIGIN = "https://www.templodagloriaeterna.com.br";
+    static final String EXTRA_NOTIFICATION_URL = "notification_url";
 
     private WebView webView;
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> fileCallback;
     private Uri cameraUri;
     private DownloadData pendingDownload;
+    private String appUserAgent = "TemploGloriaEternaApp/1.0";
+    private final ExecutorService notificationExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,7 +87,7 @@ public class MainActivity extends Activity {
 
         configureWebView();
         if (savedInstanceState == null || webView.restoreState(savedInstanceState) == null) {
-            webView.loadUrl(getString(R.string.launch_url));
+            webView.loadUrl(notificationUrlOrDefault(getIntent()));
         }
     }
 
@@ -90,8 +105,9 @@ public class MainActivity extends Activity {
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setUserAgentString(settings.getUserAgentString()
-                + " TemploGloriaEternaApp/" + getVersionName());
+        appUserAgent = settings.getUserAgentString()
+                + " TemploGloriaEternaApp/" + getVersionName();
+        settings.setUserAgentString(appUserAgent);
 
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
@@ -101,6 +117,7 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new ChurchWebViewClient());
         webView.setWebChromeClient(new ChurchWebChromeClient());
         webView.setDownloadListener(new ChurchDownloadListener());
+        webView.addJavascriptInterface(new NotificationBridge(), "TemploAndroid");
     }
 
     private String getVersionName() {
@@ -174,6 +191,7 @@ public class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             progressBar.setVisibility(View.GONE);
             CookieManager.getInstance().flush();
+            if (isChurchUrl(Uri.parse(url))) syncEnabledNotificationToken();
         }
 
         @Override
@@ -355,6 +373,14 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .edit().putBoolean(TemploMessagingService.PREF_ENABLED, granted).apply();
+            if (granted) syncEnabledNotificationToken();
+            notifyNotificationStateChanged();
+            return;
+        }
         if (requestCode == REQUEST_STORAGE && pendingDownload != null) {
             DownloadData download = pendingDownload;
             pendingDownload = null;
@@ -400,12 +426,141 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         if (fileCallback != null) fileCallback.onReceiveValue(null);
         if (webView != null) {
+            webView.removeJavascriptInterface("TemploAndroid");
             webView.stopLoading();
             webView.setWebChromeClient(null);
             webView.setWebViewClient(null);
             webView.destroy();
         }
+        notificationExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String target = notificationUrlOrDefault(intent);
+        if (webView != null && isChurchUrl(Uri.parse(target))) webView.loadUrl(target);
+    }
+
+    private String notificationUrlOrDefault(Intent intent) {
+        String target = intent == null ? null : intent.getStringExtra(EXTRA_NOTIFICATION_URL);
+        if (target != null && isChurchUrl(Uri.parse(target))) return target;
+        Uri deepLink = intent == null ? null : intent.getData();
+        if (isChurchUrl(deepLink)) return deepLink.toString();
+        return getString(R.string.launch_url);
+    }
+
+    private boolean notificationPermissionGranted() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void enableNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationPermissionGranted()) {
+            getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .edit().putBoolean(TemploMessagingService.PREF_ASKED, true).apply();
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
+            return;
+        }
+        getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                .edit().putBoolean(TemploMessagingService.PREF_ENABLED, true).apply();
+        syncEnabledNotificationToken();
+        notifyNotificationStateChanged();
+    }
+
+    private void disableNotifications() {
+        getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                .edit().putBoolean(TemploMessagingService.PREF_ENABLED, false).apply();
+        syncNotificationToken(true);
+        notifyNotificationStateChanged();
+    }
+
+    private void notifyNotificationStateChanged() {
+        if (webView == null) return;
+        webView.post(() -> webView.evaluateJavascript(
+                "window.dispatchEvent(new Event('templo-notification-state'));",
+                null
+        ));
+    }
+
+    private void syncEnabledNotificationToken() {
+        boolean enabled = getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                .getBoolean(TemploMessagingService.PREF_ENABLED, false);
+        if (enabled && notificationPermissionGranted()) syncNotificationToken(false);
+    }
+
+    private void syncNotificationToken(boolean remove) {
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+            if (!task.isSuccessful() || task.getResult() == null) return;
+            String token = task.getResult();
+            getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .edit().putString(TemploMessagingService.PREF_TOKEN, token).apply();
+            notificationExecutor.execute(() -> sendTokenToSite(token, remove));
+        });
+    }
+
+    private void sendTokenToSite(String token, boolean remove) {
+        HttpURLConnection connection = null;
+        try {
+            URL endpoint = new URL(SITE_ORIGIN + "/api/membros/push-nativo");
+            connection = (HttpURLConnection) endpoint.openConnection();
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setRequestMethod(remove ? "DELETE" : "PUT");
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("User-Agent", appUserAgent);
+            String cookie = CookieManager.getInstance().getCookie(SITE_ORIGIN);
+            if (cookie != null && !cookie.isEmpty()) connection.setRequestProperty("Cookie", cookie);
+            connection.setDoOutput(true);
+            String preferences = getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .getString(TemploMessagingService.PREF_PREFERENCES, TemploMessagingService.DEFAULT_PREFERENCES);
+            String body = "{\"token\":\"" + jsonEscape(token) + "\",\"preferencias\":" + preferences + "}";
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body.getBytes(StandardCharsets.UTF_8));
+            }
+            connection.getResponseCode();
+        } catch (Exception ignored) {
+            // O próximo carregamento de uma página da igreja tenta sincronizar novamente.
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private static String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private final class NotificationBridge {
+        @JavascriptInterface
+        public String getNotificationStatus() {
+            boolean enabled = getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .getBoolean(TemploMessagingService.PREF_ENABLED, false);
+            boolean asked = getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .getBoolean(TemploMessagingService.PREF_ASKED, false);
+            if (!notificationPermissionGranted()) return asked ? "denied" : "disabled";
+            return enabled ? "granted" : "disabled";
+        }
+
+        @JavascriptInterface
+        public void requestNotifications() {
+            runOnUiThread(MainActivity.this::enableNotifications);
+        }
+
+        @JavascriptInterface
+        public void saveNotificationPreferences(String preferencesJson) {
+            if (preferencesJson == null || preferencesJson.length() > 3000 || !preferencesJson.trim().startsWith("{")) return;
+            getSharedPreferences(TemploMessagingService.PREFS, MODE_PRIVATE)
+                    .edit().putString(TemploMessagingService.PREF_PREFERENCES, preferencesJson).apply();
+            syncEnabledNotificationToken();
+        }
+
+        @JavascriptInterface
+        public void disableNotifications() {
+            runOnUiThread(MainActivity.this::disableNotifications);
+        }
     }
 
     private static final class DownloadData {

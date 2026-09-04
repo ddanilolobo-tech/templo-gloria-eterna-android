@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Templo da Glória Eterna</string>
+    <string name="notification_channel_name">Avisos da igreja</string>
+    <string name="notification_channel_description">Publicações, eventos e comunicados da Igreja Templo da Glória Eterna</string>
     <string name="asset_statements" translatable="false">[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://www.templodagloriaeterna.com.br"}}]</string>
 </resources>
