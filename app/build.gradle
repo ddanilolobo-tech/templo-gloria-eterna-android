@@ -14,6 +14,7 @@ android {
         targetSdk 35
         versionCode runNumber.toInteger()
         versionName "1.0." + runNumber
+        resValue "string", "launch_url", "https://www.templodagloriaeterna.com.br/membro/entrar?android_app_version=android-${runNumber}"
     }
 
     signingConfigs {

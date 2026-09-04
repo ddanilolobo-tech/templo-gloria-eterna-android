@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Templo da Glória Eterna</string>
-    <string name="launch_url" translatable="false">https://www.templodagloriaeterna.com.br/membro/entrar</string>
     <string name="asset_statements" translatable="false">[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"web","site":"https://www.templodagloriaeterna.com.br"}}]</string>
 </resources>
