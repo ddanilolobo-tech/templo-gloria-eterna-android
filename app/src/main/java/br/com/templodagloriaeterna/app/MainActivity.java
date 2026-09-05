@@ -547,6 +547,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getAppVersion() {
+            try {
+                int versionCode = getPackageManager().getPackageInfo(getPackageName(), 0).versionCode;
+                return "android-" + versionCode;
+            } catch (PackageManager.NameNotFoundException error) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
         public void requestNotifications() {
             runOnUiThread(MainActivity.this::enableNotifications);
         }
