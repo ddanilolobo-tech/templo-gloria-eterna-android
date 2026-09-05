@@ -30,6 +30,7 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.Toast;
+import android.util.Base64;
 
 import androidx.core.content.FileProvider;
 import androidx.core.content.ContextCompat;
@@ -37,6 +38,7 @@ import androidx.core.content.ContextCompat;
 import com.google.firebase.messaging.FirebaseMessaging;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -560,6 +562,52 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void disableNotifications() {
             runOnUiThread(MainActivity.this::disableNotifications);
+        }
+
+        @JavascriptInterface
+        public void openPdf(String base64, String fileName) {
+            if (base64 == null || base64.isEmpty() || base64.length() > 16 * 1024 * 1024) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "O PDF não pôde ser aberto.", Toast.LENGTH_LONG).show());
+                return;
+            }
+            notificationExecutor.execute(() -> {
+                try {
+                    String safeName = fileName == null ? "carteirinha.pdf" : fileName.replaceAll("[^a-zA-Z0-9._-]", "-");
+                    if (!safeName.toLowerCase(Locale.ROOT).endsWith(".pdf")) safeName += ".pdf";
+                    File directory = new File(getCacheDir(), "pdfs");
+                    if (!directory.exists() && !directory.mkdirs()) throw new IOException("PDF directory unavailable");
+                    File pdfFile = new File(directory, safeName);
+                    byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
+                    try (FileOutputStream output = new FileOutputStream(pdfFile)) {
+                        output.write(bytes);
+                    }
+                    Uri pdfUri = FileProvider.getUriForFile(
+                            MainActivity.this,
+                            getPackageName() + ".fileprovider",
+                            pdfFile
+                    );
+                    runOnUiThread(() -> {
+                        Intent viewPdf = new Intent(Intent.ACTION_VIEW);
+                        viewPdf.setDataAndType(pdfUri, "application/pdf");
+                        viewPdf.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        try {
+                            startActivity(viewPdf);
+                        } catch (ActivityNotFoundException error) {
+                            Intent sharePdf = new Intent(Intent.ACTION_SEND);
+                            sharePdf.setType("application/pdf");
+                            sharePdf.putExtra(Intent.EXTRA_STREAM, pdfUri);
+                            sharePdf.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            try {
+                                startActivity(Intent.createChooser(sharePdf, "Abrir ou salvar a carteirinha"));
+                            } catch (ActivityNotFoundException ignored) {
+                                Toast.makeText(MainActivity.this, "Nenhum aplicativo disponível para abrir PDF.", Toast.LENGTH_LONG).show();
+                            }
+                        }
+                    });
+                } catch (Exception error) {
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Não foi possível abrir o PDF.", Toast.LENGTH_LONG).show());
+                }
+            });
         }
     }
 
